@@ -1,0 +1,491 @@
+Import pygame
+import sys
+import random
+import math
+import struct
+
+# Pygame initialize
+pygame.init()
+pygame.mixer.init(frequency=44100, size=-16, channels=2)
+
+BOARD_SIZE = 600
+CELL_SIZE = BOARD_SIZE // 15
+
+SCREEN_WIDTH = 900
+SCREEN_HEIGHT = 800
+
+OFFSET_X = (SCREEN_WIDTH - BOARD_SIZE) // 2
+OFFSET_Y = (SCREEN_HEIGHT - BOARD_SIZE) // 2
+
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("2D Ludo Game - Extra Turn on Home")
+
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+RED = (220, 50, 50)
+GREEN = (50, 180, 50)
+YELLOW = (240, 200, 40)
+BLUE = (50, 100, 220)
+GRAY = (180, 180, 180)
+DARK_BG = (15, 25, 45)
+GOLD = (255, 215, 0)
+
+PLAYERS = ["GREEN", "YELLOW", "RED", "BLUE"]
+current_turn_idx = 0
+dice_rolled = False
+current_dice_value = 0
+
+no_six_counter = {p: 0 for p in PLAYERS}
+kill_counts = {p: 0 for p in PLAYERS}
+winners = []
+
+MAIN_PATH = [
+    (1, 6), (2, 6), (3, 6), (4, 6), (5, 6),
+    (6, 5), (6, 4), (6, 3), (6, 2), (6, 1), (6, 0),
+    (7, 0),
+    (8, 0), (8, 1), (8, 2), (8, 3), (8, 4), (8, 5),
+    (9, 6), (10, 6), (11, 6), (12, 6), (13, 6), (14, 6),
+    (14, 7),
+    (14, 8), (13, 8), (12, 8), (11, 8), (10, 8), (9, 8),
+    (8, 9), (8, 10), (8, 11), (8, 12), (8, 13), (8, 14),
+    (7, 14),
+    (6, 14), (6, 13), (6, 12), (6, 11), (6, 10), (6, 9),
+    (5, 8), (4, 8), (3, 8), (2, 8), (1, 8), (0, 8),
+    (0, 7), (0, 6)
+]
+
+START_INDEX = {"GREEN": 0, "YELLOW": 13, "RED": 26, "BLUE": 39}
+SAFE_INDICES = [0, 8, 13, 21, 26, 34, 39, 47]
+
+HOME_PATHS = {
+    "GREEN": [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7)],
+    "YELLOW": [(7, 1), (7, 2), (7, 3), (7, 4), (7, 5), (7, 6)],
+    "RED": [(13, 7), (12, 7), (11, 7), (10, 7), (9, 7), (8, 7)],
+    "BLUE": [(7, 13), (7, 12), (7, 11), (7, 10), (7, 9), (7, 8)]
+}
+
+DICE_POSITIONS = {
+    "GREEN":  pygame.Rect(OFFSET_X - 110, OFFSET_Y + 20, 80, 80),
+    "YELLOW": pygame.Rect(OFFSET_X + BOARD_SIZE + 30, OFFSET_Y + 20, 80, 80),
+    "RED":    pygame.Rect(OFFSET_X + BOARD_SIZE + 30, OFFSET_Y + BOARD_SIZE - 100, 80, 80),
+    "BLUE":   pygame.Rect(OFFSET_X - 110, OFFSET_Y + BOARD_SIZE - 100, 80, 80)
+}
+
+BASE_POSITIONS = {
+    "GREEN": [(1.5, 1.5), (4.5, 1.5), (1.5, 4.5), (4.5, 4.5)],
+    "YELLOW": [(10.5, 1.5), (13.5, 1.5), (10.5, 4.5), (13.5, 4.5)],
+    "RED": [(10.5, 10.5), (13.5, 10.5), (10.5, 13.5), (13.5, 13.5)],
+    "BLUE": [(1.5, 10.5), (4.5, 10.5), (1.5, 13.5), (4.5, 13.5)]
+}
+
+dice_values = {"GREEN": 1, "YELLOW": 1, "RED": 1, "BLUE": 1}
+
+# Sound Effects Generator
+def build_tone(freq, duration):
+    sample_rate = 44100
+    n_samples = int(sample_rate * duration)
+    buf = bytearray()
+    for i in range(n_samples):
+        t = float(i) / sample_rate
+        val = int(16000 * math.sin(2.0 * math.pi * freq * t))
+        buf.extend(struct.pack('<h', val))
+        buf.extend(struct.pack('<h', val))
+    return pygame.mixer.Sound(buffer=bytes(buf))
+
+SOUNDS = {
+    "dice": build_tone(250, 0.08),
+    "step": build_tone(450, 0.05),
+    "kill": build_tone(150, 0.15),
+    "win":  build_tone(800, 0.25)
+}
+
+def play_sfx(name):
+    try:
+        if name in SOUNDS:
+            SOUNDS[name].play()
+    except Exception:
+        pass
+
+class Token:
+    def __init__(self, color, token_id, base_pos):
+        self.color = color
+        self.id = token_id
+        self.base_pos = base_pos
+        self.step_count = -1
+        self.rect = pygame.Rect(0, 0, int(CELL_SIZE * 0.6), int(CELL_SIZE * 0.6))
+        cx, cy = self.get_coordinates_for_step(self.step_count)
+        self.anim_x = float(cx)
+        self.anim_y = float(cy)
+
+    def get_global_index(self, step=None):
+        sc = self.step_count if step is None else step
+        if 0 <= sc < 51:
+            return (START_INDEX[self.color] + sc) % 52
+        return -1
+
+    def get_coordinates_for_step(self, sc):
+        if sc == -1:
+            x = OFFSET_X + self.base_pos[0] * CELL_SIZE
+            y = OFFSET_Y + self.base_pos[1] * CELL_SIZE
+            return x, y
+        elif sc < 51:
+            idx = (START_INDEX[self.color] + sc) % 52
+            grid_x, grid_y = MAIN_PATH[idx]
+            x = OFFSET_X + (grid_x + 0.5) * CELL_SIZE
+            y = OFFSET_Y + (grid_y + 0.5) * CELL_SIZE
+            return x, y
+        else:
+            home_idx = sc - 51
+            if home_idx < len(HOME_PATHS[self.color]):
+                grid_x, grid_y = HOME_PATHS[self.color][home_idx]
+                x = OFFSET_X + (grid_x + 0.5) * CELL_SIZE
+                y = OFFSET_Y + (grid_y + 0.5) * CELL_SIZE
+                return x, y
+            return OFFSET_X + 7.5 * CELL_SIZE, OFFSET_Y + 7.5 * CELL_SIZE
+
+    def draw(self, screen, is_highlighted=False):
+        self.rect.center = (int(self.anim_x), int(self.anim_y))
+        
+        # Highlight Glow Effect
+        if is_highlighted:
+            pulse = int(math.sin(pygame.time.get_ticks() * 0.01) * 3)
+            highlight_radius = int(CELL_SIZE * 0.48) + pulse
+            pygame.draw.circle(screen, GOLD, self.rect.center, highlight_radius)
+            pygame.draw.circle(screen, WHITE, self.rect.center, highlight_radius - 2, 2)
+
+        c_color = GREEN if self.color == "GREEN" else YELLOW if self.color == "YELLOW" else RED if self.color == "RED" else BLUE
+        pygame.draw.circle(screen, c_color, self.rect.center, int(CELL_SIZE * 0.35))
+        pygame.draw.circle(screen, BLACK, self.rect.center, int(CELL_SIZE * 0.35), 2)
+
+def draw_star(screen, x, y, size, color):
+    points = []
+    for i in range(10):
+        r = size if i % 2 == 0 else size / 2.2
+        angle = i * math.pi / 5 - math.pi / 2
+        points.append((x + r * math.cos(angle), y + r * math.sin(angle)))
+    pygame.draw.polygon(screen, color, points)
+    pygame.draw.polygon(screen, BLACK, points, 1)
+
+def reset_game():
+    global current_turn_idx, dice_rolled, winners, kill_counts, no_six_counter, all_tokens
+    current_turn_idx = 0
+    dice_rolled = False
+    winners = []
+    kill_counts = {p: 0 for p in PLAYERS}
+    no_six_counter = {p: 0 for p in PLAYERS}
+    all_tokens = {p: [Token(p, i, BASE_POSITIONS[p][i]) for i in range(4)] for p in PLAYERS}
+
+all_tokens = {p: [Token(p, i, BASE_POSITIONS[p][i]) for i in range(4)] for p in PLAYERS}
+font = pygame.font.SysFont("Arial", 18, bold=True)
+title_font = pygame.font.SysFont("Arial", 36, bold=True)
+
+def check_player_win(player):
+    global winners
+    if player in winners:
+        return
+    all_home = all(t.step_count == 56 for t in all_tokens[player])
+    if all_home:
+        winners.append(player)
+        play_sfx("win")
+
+def get_losing_and_killing_players():
+    scores = {p: sum([t.step_count for t in all_tokens[p] if t.step_count != -1]) for p in PLAYERS}
+    sorted_by_score = sorted(scores.items(), key=lambda x: x[1])
+    losing_player = sorted_by_score[0][0]
+    max_kills = max(kill_counts.values())
+    top_killers = [p for p, k in kill_counts.items() if k == max_kills and k > 0]
+    return losing_player, top_killers
+
+def roll_smart_dice(player):
+    global no_six_counter
+    if no_six_counter[player] >= 9:
+        val = 6
+    else:
+        losing_player, top_killers = get_losing_and_killing_players()
+        if player == losing_player or player in top_killers:
+            weights = [10, 10, 15, 20, 25, 20]
+        else:
+            weights = [16, 16, 17, 17, 17, 17]
+        val = random.choices([1, 2, 3, 4, 5, 6], weights=weights, k=1)[0]
+
+    if val == 6:
+        no_six_counter[player] = 0
+    else:
+        no_six_counter[player] += 1
+
+    play_sfx("dice")
+    return val
+
+def check_and_kill(moved_token):
+    target_idx = moved_token.get_global_index()
+    if target_idx == -1 or target_idx in SAFE_INDICES:
+        return False
+
+    killed_any = False
+    for player, tokens in all_tokens.items():
+        if player != moved_token.color:
+            for t in tokens:
+                if t.get_global_index() == target_idx:
+                    t.step_count = -1
+                    tx, ty = t.get_coordinates_for_step(-1)
+                    t.anim_x, t.anim_y = tx, ty
+                    killed_any = True
+
+    if killed_any:
+        kill_counts[moved_token.color] += 1
+        play_sfx("kill")
+
+    return killed_any
+
+def animate_token_move(token, dice_val):
+    if token.step_count == -1:
+        if dice_val == 6:
+            token.step_count = 0
+            tx, ty = token.get_coordinates_for_step(0)
+            token.anim_x, token.anim_y = tx, ty
+            play_sfx("step")
+            return True, False
+        return False, False
+    else:
+        if token.step_count + dice_val <= 56:
+            for _ in range(dice_val):
+                token.step_count += 1
+                start_x, start_y = token.anim_x, token.anim_y
+                target_x, target_y = token.get_coordinates_for_step(token.step_count)
+                
+                frames = 8
+                for f in range(1, frames + 1):
+                    token.anim_x = start_x + (target_x - start_x) * (f / frames)
+                    token.anim_y = start_y + (target_y - start_y) * (f / frames)
+                    draw_game_screen()
+                    pygame.time.delay(10)
+                
+                play_sfx("step")
+            
+            # Check if token reached Home (Step 56)
+            reached_home = (token.step_count == 56)
+            if reached_home:
+                play_sfx("win")
+                
+            return True, reached_home
+        return False, False
+
+def draw_ludo_board():
+    screen.fill(DARK_BG)
+    pygame.draw.rect(screen, WHITE, (OFFSET_X, OFFSET_Y, BOARD_SIZE, BOARD_SIZE))
+    
+    # Base Boxes
+    pygame.draw.rect(screen, GREEN, (OFFSET_X, OFFSET_Y, 6 * CELL_SIZE, 6 * CELL_SIZE))
+    pygame.draw.rect(screen, WHITE, (OFFSET_X + CELL_SIZE, OFFSET_Y + CELL_SIZE, 4 * CELL_SIZE, 4 * CELL_SIZE))
+
+    pygame.draw.rect(screen, YELLOW, (OFFSET_X + 9 * CELL_SIZE, OFFSET_Y, 6 * CELL_SIZE, 6 * CELL_SIZE))
+    pygame.draw.rect(screen, WHITE, (OFFSET_X + 10 * CELL_SIZE, OFFSET_Y + CELL_SIZE, 4 * CELL_SIZE, 4 * CELL_SIZE))
+
+    pygame.draw.rect(screen, RED, (OFFSET_X + 9 * CELL_SIZE, OFFSET_Y + 9 * CELL_SIZE, 6 * CELL_SIZE, 6 * CELL_SIZE))
+    pygame.draw.rect(screen, WHITE, (OFFSET_X + 10 * CELL_SIZE, OFFSET_Y + 10 * CELL_SIZE, 4 * CELL_SIZE, 4 * CELL_SIZE))
+
+    pygame.draw.rect(screen, BLUE, (OFFSET_X, OFFSET_Y + 9 * CELL_SIZE, 6 * CELL_SIZE, 6 * CELL_SIZE))
+    pygame.draw.rect(screen, WHITE, (OFFSET_X + CELL_SIZE, OFFSET_Y + 10 * CELL_SIZE, 4 * CELL_SIZE, 4 * CELL_SIZE))
+
+    # Home Paths
+    for i in range(1, 6):
+        pygame.draw.rect(screen, GREEN, (OFFSET_X + 1 * CELL_SIZE, OFFSET_Y + 6 * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+        pygame.draw.rect(screen, GREEN, (OFFSET_X + i * CELL_SIZE, OFFSET_Y + 7 * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+        
+        pygame.draw.rect(screen, YELLOW, (OFFSET_X + 8 * CELL_SIZE, OFFSET_Y + 1 * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+        pygame.draw.rect(screen, YELLOW, (OFFSET_X + 7 * CELL_SIZE, OFFSET_Y + i * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+
+        pygame.draw.rect(screen, RED, (OFFSET_X + 13 * CELL_SIZE, OFFSET_Y + 8 * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+        pygame.draw.rect(screen, RED, (OFFSET_X + (14 - i) * CELL_SIZE, OFFSET_Y + 7 * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+
+        pygame.draw.rect(screen, BLUE, (OFFSET_X + 6 * CELL_SIZE, OFFSET_Y + 13 * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+        pygame.draw.rect(screen, BLUE, (OFFSET_X + 7 * CELL_SIZE, OFFSET_Y + (14 - i) * CELL_SIZE, CELL_SIZE, CELL_SIZE))
+
+    # Triangles
+    pygame.draw.polygon(screen, GREEN, [(OFFSET_X + 6*CELL_SIZE, OFFSET_Y + 6*CELL_SIZE), (OFFSET_X + 7.5*CELL_SIZE, OFFSET_Y + 7.5*CELL_SIZE), (OFFSET_X + 6*CELL_SIZE, OFFSET_Y + 9*CELL_SIZE)])
+    pygame.draw.polygon(screen, YELLOW, [(OFFSET_X + 6*CELL_SIZE, OFFSET_Y + 6*CELL_SIZE), (OFFSET_X + 7.5*CELL_SIZE, OFFSET_Y + 7.5*CELL_SIZE), (OFFSET_X + 9*CELL_SIZE, OFFSET_Y + 6*CELL_SIZE)])
+    pygame.draw.polygon(screen, RED, [(OFFSET_X + 9*CELL_SIZE, OFFSET_Y + 6*CELL_SIZE), (OFFSET_X + 7.5*CELL_SIZE, OFFSET_Y + 7.5*CELL_SIZE), (OFFSET_X + 9*CELL_SIZE, OFFSET_Y + 9*CELL_SIZE)])
+    pygame.draw.polygon(screen, BLUE, [(OFFSET_X + 6*CELL_SIZE, OFFSET_Y + 9*CELL_SIZE), (OFFSET_X + 7.5*CELL_SIZE, OFFSET_Y + 7.5*CELL_SIZE), (OFFSET_X + 9*CELL_SIZE, OFFSET_Y + 9*CELL_SIZE)])
+
+    # Grid Lines
+    for row in range(16):
+        pygame.draw.line(screen, BLACK, (OFFSET_X, OFFSET_Y + row * CELL_SIZE), (OFFSET_X + BOARD_SIZE, OFFSET_Y + row * CELL_SIZE), 2)
+        pygame.draw.line(screen, BLACK, (OFFSET_X + row * CELL_SIZE, OFFSET_Y), (OFFSET_X + row * CELL_SIZE, OFFSET_Y + BOARD_SIZE), 2)
+
+    # Safe Stars
+    for s_idx in SAFE_INDICES:
+        gx, gy = MAIN_PATH[s_idx]
+        sx = OFFSET_X + (gx + 0.5) * CELL_SIZE
+        sy = OFFSET_Y + (gy + 0.5) * CELL_SIZE
+        draw_star(screen, sx, sy, CELL_SIZE * 0.35, GOLD)
+
+    # Base circles
+    for color, pos_list in BASE_POSITIONS.items():
+        for x, y in pos_list:
+            center_x = int(OFFSET_X + x * CELL_SIZE)
+            center_y = int(OFFSET_Y + y * CELL_SIZE)
+            pygame.draw.circle(screen, GRAY, (center_x, center_y), int(CELL_SIZE * 0.45))
+            pygame.draw.circle(screen, WHITE, (center_x, center_y), int(CELL_SIZE * 0.40))
+
+def draw_all_dices():
+    active_player = PLAYERS[current_turn_idx]
+    turn_text = font.render(f"CURRENT TURN: {active_player}", True, WHITE)
+    screen.blit(turn_text, (SCREEN_WIDTH // 2 - 100, 20))
+
+    for p_color, rect in DICE_POSITIONS.items():
+        is_active = (p_color == active_player)
+        val = dice_values[p_color]
+
+        bg_color = WHITE if is_active else (80, 80, 80)
+        border_color = GREEN if (is_active and p_color == "GREEN") else \
+                       YELLOW if (is_active and p_color == "YELLOW") else \
+                       RED if (is_active and p_color == "RED") else \
+                       BLUE if (is_active and p_color == "BLUE") else GRAY
+
+        pygame.draw.rect(screen, bg_color, rect, border_radius=12)
+        pygame.draw.rect(screen, border_color, rect, width=4, border_radius=12)
+
+        status_str = f"{p_color[:3]}"
+        if p_color in winners:
+            rank = winners.index(p_color) + 1
+            status_str += f" (#{rank})"
+        
+        label = font.render(status_str, True, border_color if is_active else GRAY)
+        screen.blit(label, (rect.x + 5, rect.y - 22))
+
+        cx, cy = rect.centerx, rect.centery
+        offset = 18
+        dot_color = BLACK if is_active else WHITE
+
+        dot_coords = {
+            1: [(cx, cy)],
+            2: [(cx - offset, cy - offset), (cx + offset, cy + offset)],
+            3: [(cx - offset, cy - offset), (cx, cy), (cx + offset, cy + offset)],
+            4: [(cx - offset, cy - offset), (cx + offset, cy - offset), (cx - offset, cy + offset), (cx + offset, cy + offset)],
+            5: [(cx - offset, cy - offset), (cx + offset, cy - offset), (cx, cy), (cx - offset, cy + offset), (cx + offset, cy + offset)],
+            6: [(cx - offset, cy - offset), (cx + offset, cy - offset), (cx - offset, cy), (cx + offset, cy), (cx - offset, cy + offset), (cx + offset, cy + offset)]
+        }
+
+        for dot in dot_coords[val]:
+            pygame.draw.circle(screen, dot_color, dot, 6)
+
+def next_turn():
+    global current_turn_idx, dice_rolled
+    dice_rolled = False
+    for _ in range(4):
+        current_turn_idx = (current_turn_idx + 1) % 4
+        if PLAYERS[current_turn_idx] not in winners:
+            break
+
+def execute_move(token, dice_val):
+    global dice_rolled
+    moved, reached_home = animate_token_move(token, dice_val)
+    if moved:
+        has_killed = check_and_kill(token)
+        check_player_win(token.color)
+        
+        # Extra Turn Rule: If 6 is rolled OR token kills another OR token reaches HOME
+        if has_killed or dice_val == 6 or reached_home:
+            dice_rolled = False  # Same player rolls again!
+        else:
+            next_turn()
+
+def draw_winner_overlay():
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 200))
+    screen.blit(overlay, (0, 0))
+
+    win_title = title_font.render("GAME OVER - WINNERS", True, GOLD)
+    screen.blit(win_title, (SCREEN_WIDTH // 2 - win_title.get_width() // 2, 180))
+
+    for idx, w_player in enumerate(winners):
+        rank_txt = title_font.render(f"#{idx+1} Place: {w_player}", True, WHITE)
+        screen.blit(rank_txt, (SCREEN_WIDTH // 2 - rank_txt.get_width() // 2, 270 + idx * 60))
+
+    restart_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, 520, 200, 60)
+    pygame.draw.rect(screen, GREEN, restart_rect, border_radius=15)
+    pygame.draw.rect(screen, WHITE, restart_rect, width=3, border_radius=15)
+    
+    btn_text = font.render("PLAY AGAIN", True, WHITE)
+    screen.blit(btn_text, (restart_rect.centerx - btn_text.get_width() // 2, restart_rect.centery - btn_text.get_height() // 2))
+    return restart_rect
+
+def draw_game_screen():
+    draw_ludo_board()
+    
+    active_player = PLAYERS[current_turn_idx]
+    
+    movable_tokens = []
+    if dice_rolled:
+        movable_tokens = [
+            t for t in all_tokens[active_player] 
+            if (t.step_count != -1 or current_dice_value == 6) and (t.step_count + current_dice_value <= 56)
+        ]
+
+    for player, tokens in all_tokens.items():
+        for token in tokens:
+            is_movable = (token in movable_tokens)
+            token.draw(screen, is_highlighted=is_movable)
+            
+    draw_all_dices()
+    pygame.display.flip()
+
+def main():
+    global current_turn_idx, dice_rolled, current_dice_value
+    running = True
+    
+    while running:
+        game_over = len(winners) >= 3
+        active_player = PLAYERS[current_turn_idx]
+        active_dice_rect = DICE_POSITIONS[active_player]
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if game_over:
+                    restart_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, 520, 200, 60)
+                    if restart_rect.collidepoint(event.pos):
+                        reset_game()
+                else:
+                    # Dice Roll Event
+                    if not dice_rolled and active_dice_rect.collidepoint(event.pos):
+                        current_dice_value = roll_smart_dice(active_player)
+                        dice_values[active_player] = current_dice_value
+                        dice_rolled = True
+                        
+                        movable = [
+                            t for t in all_tokens[active_player] 
+                            if (t.step_count != -1 or current_dice_value == 6) and (t.step_count + current_dice_value <= 56)
+                        ]
+                        
+                        if not movable:
+                            pygame.time.delay(300)
+                            next_turn()
+                        elif len(movable) == 1:
+                            pygame.time.delay(200)
+                            execute_move(movable[0], current_dice_value)
+
+                    # Token Move Event
+                    elif dice_rolled:
+                        for token in all_tokens[active_player]:
+                            if token.rect.collidepoint(event.pos) and token.step_count < 56:
+                                if (token.step_count != -1 or current_dice_value == 6) and (token.step_count + current_dice_value <= 56):
+                                    execute_move(token, current_dice_value)
+                                    break
+
+        draw_game_screen()
+
+        if game_over:
+            draw_winner_overlay()
+            pygame.display.flip()
+
+    pygame.quit()
+    sys.exit()
+
+if __name__ == "__main__":
+    main()
+
+Iska index html do
