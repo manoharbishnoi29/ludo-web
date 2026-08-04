@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Ludo Game</title>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: white;
+            text-align: center;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+        }
+        h1 { margin: 10px 0; font-size: 22px; }
+        #game-container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: #1e293b;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+        }
+        .board-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin: 15px 0;
+        }
+        .cell {
+            background: #334155;
+            height: 60px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .token {
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            display: inline-block;
+            line-height: 35px;
+            text-align: center;
+            color: white;
+            font-size: 12px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+        }
+        .green { background: #22c55e; }
+        .yellow { background: #eab308; color: black; }
+        .red { background: #ef4444; }
+        .blue { background: #3b82f6; }
+        
+        .controls {
+            margin-top: 15px;
+            background: #334155;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        button {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 8px;
+        }
+        button:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+
+    <h1>2D Ludo Game</h1>
+    <div id="game-container">
+        <p id="turn-info">Current Turn: <span style="color: #22c55e; font-weight: bold;">Green</span></p>
+        
+        <div class="board-grid">
+            <div class="cell" id="pos-0">Home</div>
+            <div class="cell" id="pos-1">1</div>
+            <div class="cell" id="pos-2">2</div>
+            <div class="cell" id="pos-3">3</div>
+            <div class="cell" id="pos-4">Goal</div>
+        </div>
+
+        <div class="controls">
+            <p id="dice-display">Dice Value: <b>-</b></p>
+            <button onclick="playTurn()">Roll Dice & Move</button>
+        </div>
+    </div>
+
+    <script>
+        const players = ["Green", "Yellow", "Red", "Blue"];
+        const colors = ["green", "yellow", "red", "blue"];
+        let turnIndex = 0;
+        let positions = [0, 0, 0, 0]; // Track steps for each player
+
+        function playTurn() {
+            let dice = Math.floor(Math.random() * 6) + 1;
+            document.getElementById("dice-display").innerHTML = `Dice Value: <b>${dice}</b>`;
+            
+            let currentPlayer = players[turnIndex];
+            let currentClass = colors[turnIndex];
+
+            positions[turnIndex] += dice;
+            if (positions[turnIndex] > 4) {
+                positions[turnIndex] = 4; // Reached Goal
+            }
+
+            // Clear board cells
+            for(let i=0; i<=4; i++) {
+                document.getElementById(`pos-${i}`).innerHTML = i === 0 ? "Home" : (i === 4 ? "Goal" : i);
+            }
+
+            // Place token on current position
+            let targetCell = document.getElementById(`pos-${positions[turnIndex]}`);
+            targetCell.innerHTML = `<div class="token ${currentClass}">${currentPlayer[0]}</div>`;
+
+            if(positions[turnIndex] === 4) {
+                alert(`${currentPlayer} Wins the Game! 🎉`);
+                positions[turnIndex] = 0;
+            }
+
+            // Next Turn
+            turnIndex = (turnIndex + 1) % players.length;
+            let nextPlayerCol = colors[turnIndex];
+            document.getElementById("turn-info").innerHTML = `Current Turn: <span style="color: ${getHex(nextPlayerCol)}; font-weight: bold;">${players[turnIndex]}</span>`;
+        }
+
+        function getHex(c) {
+            if(c === 'green') return '#22c55e';
+            if(c === 'yellow') return '#eab308';
+            if(c === 'red') return '#ef4444';
+            return '#3b82f6';
+        }
+    </script>
+</body>
+</html>
